@@ -1,0 +1,1 @@
+Bachelor thesis - solver of linear equation system
