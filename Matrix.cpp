@@ -136,7 +136,7 @@ void Matrix::print(FILE *out) const {
 }
 
 Matrix Matrix::GenerateRandom(pos_t rows, pos_t cols) {
-  int MAX_NUM = 100;
+  int MAX_NUM = 10;
   int MIN_NUM = 1;
   Matrix out(rows, cols);
   for (pos_t r = 0; r < rows; ++r) {
@@ -161,3 +161,39 @@ real Matrix::SquareDifference(const Matrix &A, const Matrix &B) {
 
   return diff;
 }
+
+Matrix Matrix::ConcatHorizontal(const Matrix &A, const Matrix &B) {
+  assert(A.rows == B.rows);
+
+  Matrix out(A.rows, A.cols + B.cols);
+
+  for (pos_t r = 0; r < A.rows; ++r) {
+    for (pos_t c = 0; c < A.cols; ++c) {
+      out(r, c) = A(r, c);
+    }
+    for (pos_t c = 0; c < B.cols; ++c) {
+      out(r, c + A.cols) = B(r, c);
+    }
+  }
+  return out;
+}
+
+std::pair<Matrix, Matrix> Matrix::DivideHorizontal(const Matrix &in, pos_t col) {
+  assert(col < in.cols);
+  assert (col >= 0);
+  pos_t rows = in.rows;
+
+  Matrix A(rows, col);
+  Matrix B(rows, in.cols - col);
+
+  for (pos_t r = 0; r < rows; ++r) {
+    for (pos_t c = 0; c < col; ++c) {
+      A(r, c) = in(r, c);
+    }
+    for (pos_t c = 0; c < in.cols - col; ++c) {
+      B(r, c) = in(r, c + col);
+    }
+  }
+  return std::pair<Matrix, Matrix>(A, B);
+}
+

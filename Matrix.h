@@ -5,6 +5,8 @@
 #include <cassert>
 #include <cstdio>
 
+#include <utility>
+
 typedef double real;
 typedef int pos_t;
 
@@ -39,6 +41,9 @@ struct Matrix {
   static Matrix GenerateRandom(pos_t rows, pos_t cols);
 
   static real SquareDifference(const Matrix &A, const Matrix &B);
+
+  static Matrix ConcatHorizontal(const Matrix &A, const Matrix &B);
+  static std::pair<Matrix, Matrix> DivideHorizontal(const Matrix &A, pos_t col);
 };
 
 struct LSSolution {

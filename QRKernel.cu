@@ -6,145 +6,161 @@
 
 #include "QRKernel.h"
 
-#define POS(n, m, r, c) ((r)*(m) + c)
-#define MAX_N 1024
-#define BLOCKDIM_X 1024
+#define BLOCKDIM_X_HOUSE 32
+#define BLOCKDIM_X_SUMSQUARE 32
+#define BLOCKDIM_X_VPRIME 32
+#define BLOCKDIM_X_ADD 64
+#define BLOCKDIM_X_ADD_SEQ 32
 
 
+#define POS(r, c, ld) ((c)*(ld) + (r))
 
 
-__global__ void blockHouse(double *A, int n, int m, double *Q, double *R, int c) {
-
-}
-
-void QRBlockHouseholder(double *A, int n, int m, double *Q, double *R) {
-
-}
-
-
-
-
-
-// What dimensions??
-// blockDim = m/colBlocks
-// blocks = colBlocks
-
-// blockDim = n - c
-__global__ void house2(double *A, int n, int m, int c) {
+// TODO: recursive kernel calling for multiple-block reduction
+__global__ void sumSquares1(double *A, int start, int end, double *result) {
     int x = threadIdx.x;
     int dimX = blockDim.x;
-    int blockX = blockIdx.x;
 
-    double __shared__ magx2 = 0;
-    double magv2 = 0;
-    double __shared__ x_sum[BLOCKDIM_X];
+    __shared__ double s[];
 
-    x_sum[x] = 0;
-    for (int i = c+x; i < n; i += dimX) {
-        if (i < n) {
-            x_sum[x] += A[POS(n, m, i, c)]*A[POS(n, m, i, c)];
-        }
-    }
-    // TODO: make it faster
-    if (x == 0) {
-        for (int i = 0; i < dimX; ++i) {
-            magx2 += x_sum[i];
-        }
+    s[x] = 0;
+
+    for (unsigned int i = start + x; i < end; i += dimX) {
+        s[x] += A[i]*A[i];
     }
     __syncthreads();
-    double magx = sqrt(magx2);
-    double oldVal = A[POS(n, m, c, c)];
-    double newVal = oldVal - magx;
-    magv2 = magx2 - oldVal*oldVal + newVal*newVal;
-    double beta = -2/magv2;
-
-    // CALCULATE R
-    double AprimeX;
-
-    // do a special case for v[c] which is x[c] - |x|
-    AprimeX = A[POS(n, m, c, x+c)]*newVal;
-    for (int i = c+1; i < n; ++i) {
-        AprimeX += A[POS(n, m, i, x+c)]*A[POS(n, m, i, c)];
+    for (unsigned int bound = dimX/2; bound > 0; bound /= 2) {
+        if (x < bound) {
+            s[x] += s[x + bound];
+        }
+        __syncthreads();
     }
-    // precompute |x| for next iteration??
-
-    // do a special case for v[c] which is x[c] - |x|
-    A[POS(n, m, c, x+c)] = A[POS(n, m, c, x+c)] + beta*newVal*AprimeX;
-    // R[x] = A[x];
-    // R[x] = dimX;
-    for (int i = c+1; i < n; ++i) {
-        A[POS(n, m, i, x+c)] = A[POS(n, m, i, x+c)] + beta*A[POS(n, m, i, c)]*AprimeX;
+    if (x == 0) {
+        *result = s[0];
     }
-
 }
 
-// blockdim = m - c
-__global__ void house(double *A, int n, int m, double *Q, double *R, int c) {
+__global__ void house_internal1(double *A, int m, int ld, int col, double *V, double *magX2) {
+    int x = threadIdx.x + blockDim.x*blockIdx.x + col;
+    if (x == col) V[x] = A[POS(x, col, ld)] - sqrt(*magX2);
+    else if (x > col and x < m)
+        V[x] = A[POS(x, col, ld)];
+}
+
+__global__ void calc_beta1(double *magX2, double *oldVal, double *beta) {
+    double newVal = *oldVal - sqrt(*magX2);
+    double magV2 = *magX2 - (*oldVal)*(*oldVal) + newVal*newVal;
+    *beta = -2/magV2;
+}
+
+void house1(double *A, int m, int ld, int col, double *V, double *magX2, double *beta) {
+    int vlen = m - col;
+    sumSquares1<<<1, min(vlen, BLOCKDIM_X_SUMSQUARE)>>>(A, POS(col, col, ld), POS(m, col, ld), magX2);
+    calc_beta1<<<1, 1>>>(magX2, A + POS(col, col, ld), beta);
+    int blockxdim =  min(vlen, BLOCKDIM_X_HOUSE);
+    house_internal1<<<(vlen+blockxdim-1)/blockxdim, blockxdim>>>(A, m, ld, col, V, magX2);
+}
+
+__global__ void calc_Vprime1(double *A, int m, int ld, int n, double *V, double startc, double *Vprime) {
+    int col = blockIdx.x + startc;
     int x = threadIdx.x;
     int dimX = blockDim.x;
-    int blockX = blockIdx.x;
 
-    double __shared__ magx2 = 0;
-    double magv2 = 0;
-    double __shared__ x_sum[BLOCKDIM_X];
+    __shared__ double s[];
 
-    x_sum[x] = 0;
-    for (int i = c+x; i < n; i += dimX) {
-        if (i < n) {
-            x_sum[x] += A[POS(n, m, i, c)]*A[POS(n, m, i, c)];
-        }
-    }
-    // TODO: make it faster
-    if (x == 0) {
-        for (int i = 0; i < dimX; ++i) {
-            magx2 += x_sum[i];
-        }
+    s[x] = 0;
+    for (unsigned int i = startc + x; i < m; i += dimX) {
+        s[x] += V[i]*A[POS(i, col, ld)];
     }
     __syncthreads();
-    double magx = sqrt(magx2);
-    double oldVal = A[POS(n, m, c, c)];
-    double newVal = oldVal - magx;
-    magv2 = magx2 - oldVal*oldVal + newVal*newVal;
-    double beta = -2/magv2;
-
-    // CALCULATE R
-    double AprimeX;
-
-    // do a special case for v[c] which is x[c] - |x|
-    AprimeX = A[POS(n, m, c, x+c)]*newVal;
-    for (int i = c+1; i < n; ++i) {
-        AprimeX += A[POS(n, m, i, x+c)]*A[POS(n, m, i, c)];
-    }
-    // precompute |x| for next iteration??
-
-    // do a special case for v[c] which is x[c] - |x|
-    R[POS(n, m, c, x+c)] = A[POS(n, m, c, x+c)] + beta*newVal*AprimeX;
-    // R[x] = A[x];
-    // R[x] = dimX;
-    for (int i = c+1; i < n; ++i) {
-        R[POS(n, m, i, x+c)] = A[POS(n, m, i, x+c)] + beta*A[POS(n, m, i, c)]*AprimeX;
-    }
-
-    // CALCULATE Q
-    for (int j = x; j < n; j += dimX) {
-        Q[POS(n, n, j, 0)] = beta*A[POS(n, m, j, c)]*newVal;
-        for (int i = 1; i < n; ++i) {
-            Q[POS(n, n, j, i)] = beta*A[POS(n, m, j, c)]*A[POS(n, m, i, c)];
+    for (unsigned int bound = dimX/2; bound > 0; bound /= 2) {
+        if (x < bound) {
+            s[x] += s[x + bound];
         }
-        Q[POS(n, n, j, j)] += 1;
+        __syncthreads();
     }
-    // Q[x] = beta;
-    // Clean for future iterations
-    // A[POS(n, m, x+c, c)] = 0;
-    // A[POS(n, m, x+c, c)] = POS(n, m, x+c, c);
-    // A[((x+c)*m + c)] = 0;
-    // A[POS(n, m, c, x+c)] = R[POS(n, m, c, x+c)];
-    // A[POS(n, m, c, x+c)] = POS(n, m+100, 0, 0);
-
-
+    if (x == 0) {
+        Vprime[col] = s[0];
+    }
 }
 
-__global__ void copy(double *target, double *dest, int num) {
+__global__ void add_VVprime1(double *A, int m, int ld, int n, double *V, double startc, double *Vprime, double *beta) {
+    int r = threadIdx.x + blockDim.x*blockIdx.x + startc;
+    int c = threadIdx.y + blockDim.y*blockIdx.y + startc;
+    if (r < m && c < n)
+        A[POS(r, c, ld)] += (*beta)*V[r]*Vprime[c];
+}
+
+__global__ void add_VVprime1_seq(double *A, int m, int ld, int n, double *V, double startc, double *Vprime, double *beta) {
+    int r = threadIdx.x + blockDim.x*blockIdx.x + startc;
+    int rStep = blockDim.x*gridDim.x;
+    int c = threadIdx.y + blockDim.y*blockIdx.y + startc;
+    if (c < n) {
+        for (int ri = r; ri < m; ri += rStep) {
+            A[POS(ri, c, ld)] += (*beta)*V[ri]*Vprime[c];
+        }
+    }
+}
+
+void rankOneUpdate1(double *A, int m, int ld, int n, double *V, double *beta, int startc, double *Vprime) {
+    calc_Vprime1<<<n-startc, min(m - startc, BLOCKDIM_X_VPRIME)>>>(A, m, ld, n, V, startc, Vprime);
+    int blockdimx = min((m - startc), BLOCKDIM_X_ADD);
+    add_VVprime1<<<dim3((m-startc+blockdimx-1)/blockdimx, n - startc, 1), dim3(blockdimx, 1, 1)>>>(A, m, ld, n, V, startc, Vprime, beta);
+    // int blockdimx = min((m - startc), BLOCKDIM_X_ADD_SEQ);
+    // add_VVprime1_seq<<<dim3(1, n - startc, 1), dim3(blockdimx, 1, 1)>>>(A, m, ld, n, V, startc, Vprime, beta);
+}
+
+// __global__ void zeroLowerTriangular(double *A, int rows, int cols, int cols_extended) {
+//     int x = threadIdx.x;
+//     int dimX = blockDim.x;
+//     int blockX = blockIdx.x;
+//     int numBlocks = gridDim.x;
+//     for (int r = 0; r < rows; ++r) {
+//         for (int c = x; c < cols && c < r; c += dimX) {
+//             A[POS(rows, cols_extended, r, c)] = 0;
+//         }
+//     }
+// }
+
+void QRSolve(double *A, int m, int na, int nb, int ld) {
+    double *magX2;
+    double *beta;
+    double *V;
+    double *Vprime;
+
+    if (cudaMalloc((void**)&magX2, sizeof(magX2)) != cudaSuccess) {
+      fprintf(stderr, "Device memory allocation error!\n");
+      return;
+    }
+    if (cudaMalloc((void**)&beta, sizeof(beta)) != cudaSuccess) {
+      fprintf(stderr, "Device memory allocation error!\n");
+      return;
+    }
+    if (cudaMalloc((void**)&V, sizeof(V)*m) != cudaSuccess) {
+      fprintf(stderr, "Device memory allocation error!\n");
+      return;
+    }
+    if (cudaMalloc((void**)&Vprime, sizeof(Vprime)*(na+nb)) != cudaSuccess) {
+      fprintf(stderr, "Device memory allocation error!\n");
+      return;
+    }
+
+    for (int i = 0; i < na; ++i) {
+        house1(A, m, ld, i, V, magX2, beta);
+        rankOneUpdate1(A, m, ld, na+nb, V, beta, i, Vprime);
+    }
+
+    // MagX2<<<dim3(1), dim3(BLOCKDIM_X)>>>(A, rows, 0, cols_extended, magX2);
+    // for (int i = 0; i < iters; ++i) {
+    //     house<<<dim3(1), dim3(cols_extended-i)>>>(A, rows, cols_extended, i, magX2);
+    // }
+    // zeroLowerTriangular<<<dim3(1), dim3(BLOCKDIM_X)>>>(A, rows, cols, cols_extended);
+    // cudaFree(magX2);
+}
+
+
+
+__global__ void copy1(double *target, double *dest, int num) {
     int x = threadIdx.x;
     int dimX = blockDim.x;
     int blockX = blockIdx.x;
@@ -154,35 +170,5 @@ __global__ void copy(double *target, double *dest, int num) {
         if (i < num) {
             target[i] = dest[i];
         }
-    }
-}
-
-void QRHouseholder(double *A, int n, int m, double *Q, double *R) {
-    // // int iters = (n == m) ? (n - 1) : m;
-    // int iters = 3;
-    // for (int c = 0; c < iters; ++c) {
-    //     if(c % 2 == 0) {
-    //         house<<<dim3(1), dim3(m-c)>>>(A, n, m, Q, R, c);
-    //     } else {
-    //         // reuse R as A and vice versa
-    //         house<<<dim3(1), dim3(m-c)>>>(R, n, m, Q, A, c);
-    //     }
-    // }
-    // // // TODO: memcpy(R, A) in case of (iters % 2) == 0
-    // if (iters % 2 == 0) {
-    //     copy<<<dim3(10), dim3(10)>>>(R, A, n*m);
-    // }
-    int iters = (n == m) ? (n - 1) : m;
-    // int iters = 3;
-    for (int c = 0; c < iters; ++c) {
-        house2<<<dim3(1), dim3(m-c)>>>(A, n, m, c);
-    }
-    copy<<<dim3(10), dim3(10)>>>(R, A, n*m);
-}
-
-void QRSolve(double *A, int n, int m, int m_expanded) {
-    int iters = m;
-    for (int c = 0; c < iters; ++c) {
-        house2<<<dim3(1), dim3(m_expanded-c)>>>(A, n, m_expanded, c);
     }
 }

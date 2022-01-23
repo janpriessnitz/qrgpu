@@ -5,10 +5,5 @@
 
 #include <cuda_runtime.h>
 
-void QRBlockHouseholder(double *A, int n, int m, double *Q, double *R);
-__global__ void house(double *A, int n, int m, double *Q, double *R, int c);
-void QRHouseholder(double *A, int n, int m, double *Q, double *R);
-
-void QRSolve(double *A, int n, int m, int m_expanded);
-
+void QRSolve(double *A, int m, int na, int nb, int ld);
 #endif
