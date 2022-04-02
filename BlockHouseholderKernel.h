@@ -3,10 +3,9 @@
 #define BLOCKHOUSEHOLDERKERNEL_H
 
 
+#include "Matrix.h"
 #include <cuda_runtime.h>
 
-// __global__ void house(double *A, int n, int m, int c);
-// M - extended matrix
-void QRBlockSolve(double *A, int m, int na, int nb, int ld, int R);
+void QRBlockSolve(real *A, int m, int na, int nb, int ld, int R);
 
 #endif

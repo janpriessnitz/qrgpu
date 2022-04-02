@@ -5,11 +5,11 @@
 #include "Matrix.h"
 
 
-void printMatrix(int m, int n, const double*A, int lda, const char* name)
+void printMatrix(int m, int n, const real*A, int lda, const char* name)
 {
     for(int row = 0 ; row < m ; row++){
         for(int col = 0 ; col < n ; col++){
-            double Areg = A[row + col*lda];
+            real Areg = A[row + col*lda];
             printf("%s(%d,%d) = %f\n", name, row+1, col+1, Areg);
         }
     }
@@ -44,24 +44,21 @@ Matrix QRReferenceCuSolver(const Matrix &A, const Matrix &B) {
     *   b = (6 15 4 1)'
     */
 
-    //  double A[lda*cols] = { 1.0, 4.0, 2.0, 1.0, 2.0, 5.0, 1.0, 1.0, 3.0, 6.0, 1.0, 10.0};
-//    double X[ldb*nrhs] = { 1.0, 1.0, 1.0}; // exact solution
-    // double B[ldb*nrhs] = { 6.0, 15.0, 4.0, 1.0};
     Matrix Xprime(nrhs, rows); // solution matrix from GPU with "incorrect" size
     Matrix XT(nrhs, cols); // correct size
 /* device memory */
-    double *d_A = NULL;
-    double *d_tau = NULL;
-    double *d_B  = NULL;
+    real *d_A = NULL;
+    real *d_tau = NULL;
+    real *d_B  = NULL;
     int *devInfo = NULL;
-    double *d_work = NULL;
+    real *d_work = NULL;
     int  lwork_geqrf = 0;
     int  lwork_ormqr = 0;
     int  lwork = 0;
 
     int info_gpu = 0;
 
-    const double one = 1;
+    const real one = 1;
 
     // printf("A = (matlab base-1)\n");
     // printMatrix(rows, cols, AT.data, lda, "A");
@@ -78,21 +75,22 @@ Matrix QRReferenceCuSolver(const Matrix &A, const Matrix &B) {
     assert(CUBLAS_STATUS_SUCCESS == cublas_status);
 
 /* step 2: copy A and B to device */
-    cudaStat1 = cudaMalloc ((void**)&d_A  , sizeof(double) * lda * cols);
-    cudaStat2 = cudaMalloc ((void**)&d_tau, sizeof(double) * cols);
-    cudaStat3 = cudaMalloc ((void**)&d_B  , sizeof(double) * ldb * nrhs);
+    cudaStat1 = cudaMalloc ((void**)&d_A  , sizeof(real) * lda * cols);
+    cudaStat2 = cudaMalloc ((void**)&d_tau, sizeof(real) * cols);
+    cudaStat3 = cudaMalloc ((void**)&d_B  , sizeof(real) * ldb * nrhs);
     cudaStat4 = cudaMalloc ((void**)&devInfo, sizeof(int));
     assert(cudaSuccess == cudaStat1);
     assert(cudaSuccess == cudaStat2);
     assert(cudaSuccess == cudaStat3);
     assert(cudaSuccess == cudaStat4);
 
-    cudaStat1 = cudaMemcpy(d_A, AT.data, sizeof(double) * lda * cols   , cudaMemcpyHostToDevice);
-    cudaStat2 = cudaMemcpy(d_B, BT.data, sizeof(double) * ldb * nrhs, cudaMemcpyHostToDevice);
+    cudaStat1 = cudaMemcpy(d_A, AT.data, sizeof(real) * lda * cols   , cudaMemcpyHostToDevice);
+    cudaStat2 = cudaMemcpy(d_B, BT.data, sizeof(real) * ldb * nrhs, cudaMemcpyHostToDevice);
     assert(cudaSuccess == cudaStat1);
     assert(cudaSuccess == cudaStat2);
     /* step 3: query working space of geqrf and ormqr */
     cusolver_status = cusolverDnDgeqrf_bufferSize(
+    // cusolver_status = cusolverDnSgeqrf_bufferSize(
         cusolverH,
         rows,
         cols,
@@ -102,6 +100,7 @@ Matrix QRReferenceCuSolver(const Matrix &A, const Matrix &B) {
     assert (cusolver_status == CUSOLVER_STATUS_SUCCESS);
 
     cusolver_status= cusolverDnDormqr_bufferSize(
+    // cusolver_status= cusolverDnSormqr_bufferSize(
         cusolverH,
         CUBLAS_SIDE_LEFT,
         CUBLAS_OP_T,
@@ -118,11 +117,12 @@ Matrix QRReferenceCuSolver(const Matrix &A, const Matrix &B) {
 
     lwork = (lwork_geqrf > lwork_ormqr)? lwork_geqrf : lwork_ormqr;
 
-    cudaStat1 = cudaMalloc((void**)&d_work, sizeof(double)*lwork);
+    cudaStat1 = cudaMalloc((void**)&d_work, sizeof(real)*lwork);
     assert(cudaSuccess == cudaStat1);
 
 /* step 4: compute QR factorization */
     cusolver_status = cusolverDnDgeqrf(
+    // cusolver_status = cusolverDnSgeqrf(
         cusolverH,
         rows,
         cols,
@@ -144,6 +144,7 @@ Matrix QRReferenceCuSolver(const Matrix &A, const Matrix &B) {
     assert(0 == info_gpu);
     /* step 5: compute Q^T*B */
     cusolver_status= cusolverDnDormqr(
+    // cusolver_status= cusolverDnSormqr(
         cusolverH,
         CUBLAS_SIDE_LEFT,
         CUBLAS_OP_T,
@@ -170,6 +171,7 @@ Matrix QRReferenceCuSolver(const Matrix &A, const Matrix &B) {
 
 /* step 6: compute x = R \ Q^T*B */
     cublas_status = cublasDtrsm(
+    // cublas_status = cublasStrsm(
          cublasH,
          CUBLAS_SIDE_LEFT,
          CUBLAS_FILL_MODE_UPPER,
@@ -186,7 +188,7 @@ Matrix QRReferenceCuSolver(const Matrix &A, const Matrix &B) {
     assert(CUBLAS_STATUS_SUCCESS == cublas_status);
     assert(cudaSuccess == cudaStat1);
 
-    cudaStat1 = cudaMemcpy(Xprime.data, d_B, sizeof(double)*rows*nrhs, cudaMemcpyDeviceToHost);
+    cudaStat1 = cudaMemcpy(Xprime.data, d_B, sizeof(real)*rows*nrhs, cudaMemcpyDeviceToHost);
     assert(cudaSuccess == cudaStat1);
 
     // printf("X = (matlab base-1)\n");

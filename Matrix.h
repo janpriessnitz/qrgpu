@@ -7,6 +7,7 @@
 
 #include <utility>
 
+// typedef double real;
 typedef double real;
 typedef int pos_t;
 

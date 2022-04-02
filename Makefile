@@ -11,5 +11,5 @@ SOURCES = *.cpp *.cu
 # 	QRTuning.cpp
 # }
 
-main: $(SOURCES)
+main: $(SOURCES) *.h
 	$(CC) -std=c++11 -pedantic -Wall -Wextra -o main -I$(CUDAPATH)/include -I$(MATHPATH)/include -L$(CUDAPATH)/libs -L$(MATHPATH)/lib64 -lcudart -lcublas -lcusolver $(SOURCES)

@@ -17,9 +17,9 @@ int main(int argc, char** argv) {
     // srand(time(nullptr));
     srand(1);
 
-    int rows = 5;
-    int cols = 5;
-    int nrhs = 10;
+    int rows = 2100;
+    int cols = 2095;
+    int nrhs = 1;
 
     auto A = Matrix::GenerateRandom(rows, cols);
     auto B = Matrix::GenerateRandom(rows, nrhs);

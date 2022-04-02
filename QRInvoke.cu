@@ -13,7 +13,7 @@ void InvokeSolve(Matrix *A, int cols) {
   int rows = A->rows;
   int cols_expanded = A->cols;
   auto AT = A->getT();
-  double *dA = NULL;
+  real *dA = NULL;
 
   int device = 0;
   if (cudaSetDevice(device) != cudaSuccess){
@@ -32,7 +32,7 @@ void InvokeSolve(Matrix *A, int cols) {
   cudaMemcpy(dA, AT.data, rows*cols_expanded*sizeof(dA[0]), cudaMemcpyHostToDevice);
 
   cudaDeviceSynchronize();
-  QRBlockSolve(dA, rows, cols, cols_expanded - cols, rows, 2);
+  QRBlockSolve(dA, rows, cols, cols_expanded - cols, rows, 64);
   // QRSolve(dA, rows, cols, cols_expanded - cols, rows);
   printf("Kernel launch error: %s\n", cudaGetErrorString(cudaGetLastError()));
   cudaDeviceSynchronize();
