@@ -133,7 +133,7 @@ __global__ void calc_Wprime(real *A, int m, int ld, int n, int startc, int start
 
     int j = threadIdx.y + blockIdx.y*blockDim.y;
 
-    __shared__ real s[];
+    __shared__ real s[BLOCKDIM_X_WPRIME];
 
     s[x] = 0;
     for (unsigned int i = x + startc; i < m; i += dimX) {

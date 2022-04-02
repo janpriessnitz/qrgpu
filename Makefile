@@ -1,4 +1,4 @@
-CC = nvc++
+CC = nvcc
 
 CUDAPATH = ${CUDA_PATH}
 MATHPATH = /home/jpriessnitz/hpc_sdk/Linux_x86_64/21.7/math_libs
@@ -12,4 +12,4 @@ SOURCES = *.cpp *.cu
 # }
 
 main: $(SOURCES) *.h
-	$(CC) -std=c++11 -pedantic -Wall -Wextra -o main -I$(CUDAPATH)/include -I$(MATHPATH)/include -L$(CUDAPATH)/libs -L$(MATHPATH)/lib64 -lcudart -lcublas -lcusolver $(SOURCES)
+	$(CC) -std=c++11 -o main -I$(CUDAPATH)/include -I$(MATHPATH)/include -L$(CUDAPATH)/libs -L$(MATHPATH)/lib64 -lcudart -lcublas -lcusolver $(SOURCES)
