@@ -17,8 +17,8 @@ int main(int argc, char** argv) {
     // srand(time(nullptr));
     srand(1);
 
-    int rows = 2100;
-    int cols = 2095;
+    int rows = 2000;
+    int cols = 2000;
     int nrhs = 1;
 
     auto A = Matrix::GenerateRandom(rows, cols);

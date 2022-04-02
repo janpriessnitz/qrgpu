@@ -89,8 +89,8 @@ Matrix QRReferenceCuSolver(const Matrix &A, const Matrix &B) {
     assert(cudaSuccess == cudaStat1);
     assert(cudaSuccess == cudaStat2);
     /* step 3: query working space of geqrf and ormqr */
-    cusolver_status = cusolverDnDgeqrf_bufferSize(
-    // cusolver_status = cusolverDnSgeqrf_bufferSize(
+    // cusolver_status = cusolverDnDgeqrf_bufferSize(
+    cusolver_status = cusolverDnSgeqrf_bufferSize(
         cusolverH,
         rows,
         cols,
@@ -99,8 +99,8 @@ Matrix QRReferenceCuSolver(const Matrix &A, const Matrix &B) {
         &lwork_geqrf);
     assert (cusolver_status == CUSOLVER_STATUS_SUCCESS);
 
-    cusolver_status= cusolverDnDormqr_bufferSize(
-    // cusolver_status= cusolverDnSormqr_bufferSize(
+    // cusolver_status= cusolverDnDormqr_bufferSize(
+    cusolver_status= cusolverDnSormqr_bufferSize(
         cusolverH,
         CUBLAS_SIDE_LEFT,
         CUBLAS_OP_T,
@@ -121,8 +121,8 @@ Matrix QRReferenceCuSolver(const Matrix &A, const Matrix &B) {
     assert(cudaSuccess == cudaStat1);
 
 /* step 4: compute QR factorization */
-    cusolver_status = cusolverDnDgeqrf(
-    // cusolver_status = cusolverDnSgeqrf(
+    // cusolver_status = cusolverDnDgeqrf(
+    cusolver_status = cusolverDnSgeqrf(
         cusolverH,
         rows,
         cols,
@@ -143,8 +143,8 @@ Matrix QRReferenceCuSolver(const Matrix &A, const Matrix &B) {
     // printf("after geqrf: info_gpu = %d\n", info_gpu);
     assert(0 == info_gpu);
     /* step 5: compute Q^T*B */
-    cusolver_status= cusolverDnDormqr(
-    // cusolver_status= cusolverDnSormqr(
+    // cusolver_status= cusolverDnDormqr(
+    cusolver_status= cusolverDnSormqr(
         cusolverH,
         CUBLAS_SIDE_LEFT,
         CUBLAS_OP_T,
@@ -170,8 +170,8 @@ Matrix QRReferenceCuSolver(const Matrix &A, const Matrix &B) {
     assert(0 == info_gpu);
 
 /* step 6: compute x = R \ Q^T*B */
-    cublas_status = cublasDtrsm(
-    // cublas_status = cublasStrsm(
+    // cublas_status = cublasDtrsm(
+    cublas_status = cublasStrsm(
          cublasH,
          CUBLAS_SIDE_LEFT,
          CUBLAS_FILL_MODE_UPPER,

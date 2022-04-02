@@ -269,20 +269,20 @@ __global__ void add_YWprime(real *A, int m, int ld, int n, int startc, int start
 
 void rankRUpdate(real *A, int m, int ld, int n, int startc, int startn, int R, real *Y, real *W, real *Wprime) {
     // if (n - startn < 1200) {
-    // calc_Wprime<<<dim3(n-startn, R, 1), dim3(BLOCKDIM_X_WPRIME, 1, 1)>>>(A, m, ld, n, startc, startn, R, W, Wprime);
+    calc_Wprime<<<dim3(n-startn, R, 1), dim3(BLOCKDIM_X_WPRIME, 1, 1)>>>(A, m, ld, n, startc, startn, R, W, Wprime);
     // calc_Wprime_dumb<<<dim3(n, R, 1), dim3(1, 1, 1)>>>(A, m, ld, n, startc, startn, R, W, Wprime);
     // } else {
-    real one = 1;
-    real zero = 0;
+    // real one = 1;
+    // real zero = 0;
     // cublasSgemm(cublasH,
-    cublasDgemm(cublasH,
-                CUBLAS_OP_N, CUBLAS_OP_N,
-                R, n - startn, m - startc,
-                &one,
-                W, m,
-                A, m,
-                &zero,
-                Wprime, n);
+    // cublasDgemm(cublasH,
+    //             CUBLAS_OP_N, CUBLAS_OP_N,
+    //             R, n - startn, m - startc,
+    //             &one,
+    //             W, m,
+    //             A, m,
+    //             &zero,
+    //             Wprime, n);
     // calc_Wprime2<<<dim3((n-startn+TILE_SIZE-1)/TILE_SIZE, (R+TILE_SIZE-1)/TILE_SIZE, 1), dim3(TILE_SIZE, TILE_SIZE, 1)>>>(A, m, ld, n, startc, startn, R, W, Wprime);
     // }
     // calc_Wprime3<<<dim3(1,(n-startn)/WPRIME_N, 1), dim3(WPRIME_VERT, WPRIME_N, 1)>>>(A, m, ld, n, startc, startn, R, W, Wprime);

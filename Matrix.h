@@ -8,7 +8,7 @@
 #include <utility>
 
 // typedef double real;
-typedef double real;
+typedef float real;
 typedef int pos_t;
 
 struct Matrix {
