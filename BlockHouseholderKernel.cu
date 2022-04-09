@@ -70,10 +70,12 @@ __global__ void calc_beta(real *magX2, real *oldVal, real *beta) {
     *beta = 2/magV2;
 }
 
-__global__ void householder_calc_beta(real *A, int m, int ld, int col, real *V, real *beta) {
+__global__ void householder_calc_beta(real *A, int m, int ld, int col, real *V) {
     int x = threadIdx.x;
     int dimX = blockDim.x;
     __shared__ real s[BLOCKDIM_X_SUMSQUARE];
+    __shared__ real beta;
+    __shared__ real tau;
 
     s[x] = 0;
     for (unsigned int i = col + x; i < m; i += dimX) {
@@ -88,28 +90,50 @@ __global__ void householder_calc_beta(real *A, int m, int ld, int col, real *V, 
     }
     // s[0] is magX2
     if (x == 0) {
-        real oldVal = A[POS(col, col, ld)];
-        real newVal = oldVal - sqrt(s[0]);
-        real magV2 = s[0] - oldVal*oldVal + newVal*newVal;
-        *beta = 2/magV2;
+        if (A[POS(col, col, ld)] > 0) {
+            real oldVal = A[POS(col, col, ld)];
+            real newVal = oldVal + sqrt(s[0]);
+            real magV2 = s[0] - oldVal*oldVal + newVal*newVal;
+            beta = 2/magV2;
+            tau = (A[POS(col, col, ld)] + sqrt(s[0]))*sqrt(beta);
+            A[POS(col, col, ld)] = -sqrt(s[0]);
+
+        } else {
+            real oldVal = A[POS(col, col, ld)];
+            real newVal = oldVal - sqrt(s[0]);
+            real magV2 = s[0] - oldVal*oldVal + newVal*newVal;
+            beta = 2/magV2;
+            tau = (A[POS(col, col, ld)] - sqrt(s[0]))*sqrt(beta);
+            A[POS(col, col, ld)] = sqrt(s[0]);
+        }
+        V[col] = tau;
     }
+
+    __syncthreads();
 
     for (unsigned int i = x; i < m; i += dimX) {
         if (i < col) V[i] = 0;
         else if (i == col) {
             // A[POS(col, col, ld)] -=
-            V[i] = A[POS(col, col, ld)] - sqrt(s[0]);
+            // V[i] = tau;
+            // A[POS(col, col, ld)] = sqrt(s[0]);
+            // A[POS(col, col, ld)] = V[i];
+            // A[POS(col, col, ld)] = (sqrt(s[0])+2)*sqrt(*beta);
         }
-        else V[i] = A[POS(i, col, ld)];
+        else {
+            V[i] = A[POS(i, col, ld)]*sqrt(beta);
+            // A[POS(i, col, ld)] = A[POS(i, col, ld)]/(sqrt(s[0])+2);
+            A[POS(i, col, ld)] *= sqrt(beta)/tau;
+        }
     }
 }
 
-void house(real *A, int m, int ld, int col, real *V, real *magX2, real *beta) {
+void house(real *A, int m, int ld, int col, real *V, real *taus, real *beta) {
     // sumSquares<<<1, BLOCKDIM_X_SUMSQUARE>>>(A, POS(col, col, ld), POS(m, col, ld), magX2);
     // calc_beta<<<1, 1>>>(magX2, A + POS(col, col, ld), beta);
     // int blockxdim =  min(m, BLOCKDIM_X_HOUSE);
     // house_internal<<<(m+blockxdim-1)/blockxdim, blockxdim>>>(A, m, ld, col, V, magX2);
-    householder_calc_beta<<<1, BLOCKDIM_X_SUMSQUARE>>>(A, m, ld, col, V, beta); 
+    householder_calc_beta<<<1, BLOCKDIM_X_SUMSQUARE>>>(A, m, ld, col, V); 
 }
 
 __global__ void calc_Vprime(real *A, int m, int ld, int n, real *V, real startc, real *Vprime) {
@@ -135,8 +159,8 @@ __global__ void calc_Vprime(real *A, int m, int ld, int n, real *V, real startc,
     }
 }
 
-__global__ void calc_and_add_V(real *A, int m, int ld, int n, real *V, real startc, real *Vprime, real *beta) {
-    int col = blockIdx.x + startc;
+__global__ void calc_and_add_V(real *A, int m, int ld, int n, real *V, real startc, real *Vprime) {
+    int col = blockIdx.x + startc + 1;
     int x = threadIdx.x;
     int dimX = blockDim.x;
 
@@ -160,7 +184,8 @@ __global__ void calc_and_add_V(real *A, int m, int ld, int n, real *V, real star
 
     for (int i = x + startc; i < m; i += dimX) {
         // A[POS(i, col, ld)] -= (*beta)*V[i]*Vprime[col];
-        A[POS(i, col, ld)] -= (*beta)*V[i]*s[0];
+        // A[POS(i, col, ld)] -= (*beta)*V[i]*s[0];
+        A[POS(i, col, ld)] -= V[i]*s[0];
     }
 }
 
@@ -183,7 +208,7 @@ __global__ void add_VVprime_seq(real *A, int m, int ld, int n, real *V, int star
     }
 }
 
-void rankOneUpdate(real *A, int m, int ld, int n, real *V, real *beta, int startc, real *Vprime) {
+void rankOneUpdate(real *A, int m, int ld, int n, real *V, int startc, real *Vprime) {
     // real one = 1;
     // real zero = 0;
     // cublas_gemv(cublasH, CUBLAS_OP_T,
@@ -197,8 +222,8 @@ void rankOneUpdate(real *A, int m, int ld, int n, real *V, real *beta, int start
     // int blockdimx = min((m - startc), BLOCKDIM_X_ADD);
     // int blockdimy = min((n - startc), BLOCKDIM_Y_ADD);
     // add_VVprime<<<dim3((m-startc+blockdimx-1)/blockdimx, (n - startc+blockdimy-1)/blockdimy, 1), dim3(blockdimx, blockdimy, 1)>>>(A, m, ld, n, V, startc, Vprime, beta);
-
-    calc_and_add_V<<<n-startc, BLOCKDIM_X_VPRIME>>>(A, m, ld, n, V, startc, Vprime, beta);
+    if (n - startc - 1 > 0)
+        calc_and_add_V<<<n-startc-1, BLOCKDIM_X_VPRIME>>>(A, m, ld, n, V, startc, Vprime);
 
     // int blockdimx = min((m - startc), BLOCKDIM_X_ADD_SEQ);
     // add_VVprime1_seq<<<dim3(1, n - startc, 1), dim3(blockdimx, 1, 1)>>>(A, m, ld, n, V, startc, Vprime, beta);
@@ -293,7 +318,7 @@ __global__ void calc_Yprime(int m, int startc, real *Y, real *V, real *Yprime) {
     }
 }
 
-__global__ void calc_W(int m, int col, int startc, real *W, real *Y, real *Yprime, real *beta) {
+__global__ void calc_W(int m, int col, int startc, real *W, real *Y, real *Yprime) {
     int x = threadIdx.x + blockIdx.x*blockDim.x;
     // if (x < startc + col) {
         // W[POS(x, col, m)] = 0;
@@ -304,39 +329,43 @@ __global__ void calc_W(int m, int col, int startc, real *W, real *Y, real *Yprim
             z += W[POS(x, i, m)]*Yprime[i];
         }
         z += Y[POS(x, col, m)];
-        z *= -(*beta);
+        // z *= -(*beta);
+        z *= -1;
         W[POS(x, col, m)] = z;
     }
 }
 
-__global__ void copy_W(int m, int startc, real *Y, real *W, real *beta) {
+__global__ void copy_W(int m, int startc, real *Y, real *W) {
     int x = threadIdx.x + blockIdx.x*blockDim.x + startc;
     if (x < m) {
-        W[x] = -(*beta)*Y[x];
+        // W[x] = -(*beta)*Y[x];
+        W[x] = -Y[x];
     }
 }
 
-void append_W(int m, int col, int startc, real *Y, real *W, real *Wprime, real *beta) {
+void append_W(int m, int col, int startc, real *Y, real *W, real *Wprime) {
     if (col == 0) {
         int blockdim = min(BLOCKDIM_X_COPYW, m - startc);
-        copy_W<<<(m-startc+blockdim-1)/blockdim, blockdim>>>(m ,startc, Y, W, beta);
+        copy_W<<<(m-startc+blockdim-1)/blockdim, blockdim>>>(m ,startc, Y, W);
     } else {
         real *V = Y + POS(0, col, m);
         calc_Yprime<<<col, BLOCKDIM_X_CALC_YPRIME>>>(m, startc, Y, V, Wprime);
         int blockdim = min(BLOCKDIM_X_CALCW, m);
-        calc_W<<<(m + blockdim-1)/blockdim, blockdim>>>(m, col, startc, W, Y, Wprime, beta);
+        calc_W<<<(m + blockdim-1)/blockdim, blockdim>>>(m, col, startc, W, Y, Wprime);
     }
 }
 
-void doOneBlock(real *A, int m, int ld, int n, int R, int col, real *Y, real *W, real *Wprime, real *beta, real *magX2) {
+void doOneBlock(real *A, int m, int ld, int n, int R, int col, real *Y, real *W, real *Wprime, real *beta, real *taus) {
     for (int i = 0; i < R; ++i) {
         int curcol = col + i;
+        if (curcol >= m - 1) goto decomp_finished;
         real *curV = Y + POS(0, i, m);
-        house(A, m, ld, curcol, curV, magX2, beta);
-        rankOneUpdate(A, m, ld, col + R, curV, beta, curcol, Wprime);
-        append_W(m, i, curcol, Y, W, Wprime, beta);
+        house(A, m, ld, curcol, curV, taus, beta);
+        rankOneUpdate(A, m, ld, col + R, curV, curcol, Wprime);
+        append_W(m, i, curcol, Y, W, Wprime);
     }
     rankRUpdate(A, m, ld, n, col, col+R, R, Y, W, Wprime);
+    decomp_finished:;
     // printY<<<dim3(m, R), dim3(1,1,1)>>>(A, m, ld, n, R, Y, W);
     // printbeta<<<1, 1>>>(A, beta);
 }
@@ -353,8 +382,7 @@ void doOneBlock(real *A, int m, int ld, int n, int R, int col, real *Y, real *W,
 //     }
 // }
 
-void QRBlockSolve(real *A, int m, int na, int nb, int ld, int R, uint64_t *usec_taken) {
-    real *magX2;
+void QRBlockSolve(real *A, real *taus, int m, int na, int nb, int ld, int R, uint64_t *usec_taken) {
     real *beta;
     real *Y;
     real *W;
@@ -363,10 +391,6 @@ void QRBlockSolve(real *A, int m, int na, int nb, int ld, int R, uint64_t *usec_
 
     cublasStatus_t cublas_status = cublasCreate(&cublasH);
 
-    if (cudaMalloc((void**)&magX2, sizeof(magX2)) != cudaSuccess) {
-      fprintf(stderr, "Device memory allocation error!\n");
-      return;
-    }
     if (cudaMalloc((void**)&beta, sizeof(beta)) != cudaSuccess) {
       fprintf(stderr, "Device memory allocation error!\n");
       return;
@@ -387,9 +411,9 @@ void QRBlockSolve(real *A, int m, int na, int nb, int ld, int R, uint64_t *usec_
     cudaDeviceSynchronize();
     auto cuStart = std::chrono::high_resolution_clock::now();
 
-    for (int col = 0; col < na; col += R) {
+    for (int col = 0; col < na-1; col += R) {
         int curR = min(R, na - col);
-        doOneBlock(A, m, ld, (na+nb), curR, col, Y, W, Wprime, beta, magX2);
+        doOneBlock(A, m, ld, (na+nb), curR, col, Y, W, Wprime, beta, taus);
     }
 
     cudaDeviceSynchronize();
@@ -399,7 +423,6 @@ void QRBlockSolve(real *A, int m, int na, int nb, int ld, int R, uint64_t *usec_
 
     if (cublasH) cublasDestroy(cublasH);
 
-    cudaFree(magX2);
     cudaFree(beta);
     cudaFree(Y);
     cudaFree(W);

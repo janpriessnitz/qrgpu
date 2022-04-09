@@ -144,6 +144,33 @@ Matrix QRReferenceCuSolver(const Matrix &A, const Matrix &B, uint64_t *us_taken)
     auto cuDuration = std::chrono::duration_cast<std::chrono::microseconds>(cuEnd - cuStart).count();
     *us_taken = cuDuration;
 
+    cudaStat1 = cudaMemcpy(AT.data, d_A, sizeof(real) * lda * cols, cudaMemcpyDeviceToHost);
+    assert(cudaSuccess == cudaStat1);
+    
+    // real taus[100];
+    // cudaStat1 = cudaMemcpy(taus, d_tau, sizeof(real) * cols, cudaMemcpyDeviceToHost);
+    // assert(cudaSuccess == cudaStat1);
+
+    // printf("cuSolver:\n");
+    // AT.getT().print();
+    // printf("taus:\n");
+    // for (int i = 0; i < cols; ++i) {
+    //     printf("%.4f ", taus[i]);
+    // }
+    // printf("\n");
+
+    if (d_A    ) cudaFree(d_A);
+    if (d_tau  ) cudaFree(d_tau);
+    if (d_B    ) cudaFree(d_B);
+    if (devInfo) cudaFree(devInfo);
+    if (d_work ) cudaFree(d_work);
+    if (cublasH ) cublasDestroy(cublasH);
+    if (cusolverH) cusolverDnDestroy(cusolverH);
+    cudaDeviceReset();
+
+    return AT.getT();
+
+
     /* check if QR is good or not */
     cudaStat1 = cudaMemcpy(&info_gpu, devInfo, sizeof(int), cudaMemcpyDeviceToHost);
     assert(cudaSuccess == cudaStat1);
