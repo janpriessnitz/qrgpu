@@ -7,11 +7,32 @@
 
 #include <utility>
 
-// typedef double real;
+#define DOUBLE_PRECISION 1
+
+#if DOUBLE_PRECISION
+#define cublas_gemm cublasDgemm
+#define cusolverDn_geqrf_bufferSize cusolverDnDgeqrf_bufferSize
+#define cusolverDn_ormqr_bufferSize cusolverDnDormqr_bufferSize
+#define cusolverDn_geqrf cusolverDnDgeqrf
+#define cusolverDn_ormqr cusolverDnDormqr
+#define cublas_trsm cublasDtrsm
+#define cublas_gemv cublasDgemv
+typedef double real;
+#else
+#define cublas_gemm cublasSgemm
+#define cusolverDn_geqrf_bufferSize cusolverDnSgeqrf_bufferSize
+#define cusolverDn_ormqr_bufferSize cusolverDnSormqr_bufferSize
+#define cusolverDn_geqrf cusolverDnSgeqrf
+#define cusolverDn_ormqr cusolverDnSormqr
+#define cublas_trsm cublasStrsm
+#define cublas_gemv cublasSgemv
 typedef float real;
+#endif
+
 typedef int pos_t;
 
 struct Matrix {
+  Matrix();
   Matrix(pos_t rows, pos_t cols);
   // rule of five
   Matrix(const Matrix &other);

@@ -4,12 +4,13 @@
 #include <cmath>
 #include <cstdio>
 #include <cublas_v2.h>
+#include <chrono>
 
 #include "BlockHouseholderKernel.h"
 
-#define BLOCKDIM_X_HOUSE 32
-#define BLOCKDIM_X_SUMSQUARE 512
-#define BLOCKDIM_X_VPRIME 128
+#define BLOCKDIM_X_HOUSE 512
+#define BLOCKDIM_X_SUMSQUARE 1024
+#define BLOCKDIM_X_VPRIME 512
 #define BLOCKDIM_X_ADD 32
 #define BLOCKDIM_Y_ADD 8
 #define BLOCKDIM_X_ADD_SEQ 32
@@ -69,11 +70,46 @@ __global__ void calc_beta(real *magX2, real *oldVal, real *beta) {
     *beta = 2/magV2;
 }
 
+__global__ void householder_calc_beta(real *A, int m, int ld, int col, real *V, real *beta) {
+    int x = threadIdx.x;
+    int dimX = blockDim.x;
+    __shared__ real s[BLOCKDIM_X_SUMSQUARE];
+
+    s[x] = 0;
+    for (unsigned int i = col + x; i < m; i += dimX) {
+        s[x] += A[POS(i, col, ld)]*A[POS(i, col, ld)];
+    }
+    __syncthreads();
+    for (unsigned int bound = dimX/2; bound > 0; bound /= 2) {
+        if (x < bound) {
+            s[x] += s[x + bound];
+        }
+        __syncthreads();
+    }
+    // s[0] is magX2
+    if (x == 0) {
+        real oldVal = A[POS(col, col, ld)];
+        real newVal = oldVal - sqrt(s[0]);
+        real magV2 = s[0] - oldVal*oldVal + newVal*newVal;
+        *beta = 2/magV2;
+    }
+
+    for (unsigned int i = x; i < m; i += dimX) {
+        if (i < col) V[i] = 0;
+        else if (i == col) {
+            // A[POS(col, col, ld)] -=
+            V[i] = A[POS(col, col, ld)] - sqrt(s[0]);
+        }
+        else V[i] = A[POS(i, col, ld)];
+    }
+}
+
 void house(real *A, int m, int ld, int col, real *V, real *magX2, real *beta) {
-    sumSquares<<<1, BLOCKDIM_X_SUMSQUARE>>>(A, POS(col, col, ld), POS(m, col, ld), magX2);
-    calc_beta<<<1, 1>>>(magX2, A + POS(col, col, ld), beta);
-    int blockxdim =  min(m, BLOCKDIM_X_HOUSE);
-    house_internal<<<(m+blockxdim-1)/blockxdim, blockxdim>>>(A, m, ld, col, V, magX2);
+    // sumSquares<<<1, BLOCKDIM_X_SUMSQUARE>>>(A, POS(col, col, ld), POS(m, col, ld), magX2);
+    // calc_beta<<<1, 1>>>(magX2, A + POS(col, col, ld), beta);
+    // int blockxdim =  min(m, BLOCKDIM_X_HOUSE);
+    // house_internal<<<(m+blockxdim-1)/blockxdim, blockxdim>>>(A, m, ld, col, V, magX2);
+    householder_calc_beta<<<1, BLOCKDIM_X_SUMSQUARE>>>(A, m, ld, col, V, beta); 
 }
 
 __global__ void calc_Vprime(real *A, int m, int ld, int n, real *V, real startc, real *Vprime) {
@@ -99,6 +135,36 @@ __global__ void calc_Vprime(real *A, int m, int ld, int n, real *V, real startc,
     }
 }
 
+__global__ void calc_and_add_V(real *A, int m, int ld, int n, real *V, real startc, real *Vprime, real *beta) {
+    int col = blockIdx.x + startc;
+    int x = threadIdx.x;
+    int dimX = blockDim.x;
+
+    __shared__ real s[BLOCKDIM_X_VPRIME];
+
+    s[x] = 0;
+    for (unsigned int i = startc + x; i < m; i += dimX) {
+        s[x] += V[i]*A[POS(i, col, ld)];
+    }
+    __syncthreads();
+    for (unsigned int bound = dimX/2; bound > 0; bound /= 2) {
+        if (x < bound) {
+            s[x] += s[x + bound];
+        }
+        __syncthreads();
+    }
+    // if (x == 0) {
+    //     Vprime[col] = s[0];
+    // }
+    // __syncthreads();
+
+    for (int i = x + startc; i < m; i += dimX) {
+        // A[POS(i, col, ld)] -= (*beta)*V[i]*Vprime[col];
+        A[POS(i, col, ld)] -= (*beta)*V[i]*s[0];
+    }
+}
+
+
 __global__ void add_VVprime(real *A, int m, int ld, int n, real *V, int startc, real *Vprime, real *beta) {
     int r = threadIdx.x + blockDim.x*blockIdx.x + startc;
     int c = threadIdx.y + blockDim.y*blockIdx.y + startc;
@@ -118,10 +184,22 @@ __global__ void add_VVprime_seq(real *A, int m, int ld, int n, real *V, int star
 }
 
 void rankOneUpdate(real *A, int m, int ld, int n, real *V, real *beta, int startc, real *Vprime) {
-    calc_Vprime<<<n-startc, BLOCKDIM_X_VPRIME>>>(A, m, ld, n, V, startc, Vprime);
-    int blockdimx = min((m - startc), BLOCKDIM_X_ADD);
-    int blockdimy = min((n - startc), BLOCKDIM_Y_ADD);
-    add_VVprime<<<dim3((m-startc+blockdimx-1)/blockdimx, (n - startc+blockdimy-1)/blockdimy, 1), dim3(blockdimx, blockdimy, 1)>>>(A, m, ld, n, V, startc, Vprime, beta);
+    // real one = 1;
+    // real zero = 0;
+    // cublas_gemv(cublasH, CUBLAS_OP_T,
+    //                        m - startc, n - startc,
+    //                        &one,
+    //                        A + POS(startc, startc, ld), ld,
+    //                        V + startc, 1,
+    //                        &zero,
+    //                        Vprime + startc, 1);
+    // calc_Vprime<<<n-startc, BLOCKDIM_X_VPRIME>>>(A, m, ld, n, V, startc, Vprime);
+    // int blockdimx = min((m - startc), BLOCKDIM_X_ADD);
+    // int blockdimy = min((n - startc), BLOCKDIM_Y_ADD);
+    // add_VVprime<<<dim3((m-startc+blockdimx-1)/blockdimx, (n - startc+blockdimy-1)/blockdimy, 1), dim3(blockdimx, blockdimy, 1)>>>(A, m, ld, n, V, startc, Vprime, beta);
+
+    calc_and_add_V<<<n-startc, BLOCKDIM_X_VPRIME>>>(A, m, ld, n, V, startc, Vprime, beta);
+
     // int blockdimx = min((m - startc), BLOCKDIM_X_ADD_SEQ);
     // add_VVprime1_seq<<<dim3(1, n - startc, 1), dim3(blockdimx, 1, 1)>>>(A, m, ld, n, V, startc, Vprime, beta);
 }
@@ -151,73 +229,6 @@ __global__ void calc_Wprime(real *A, int m, int ld, int n, int startc, int start
     }
 }
 
-__global__ void calc_Wprime2(real *A, int m, int ld, int n, int startc, int startn, int R, real *W, real *Wprime) {
-    int bx = blockIdx.x; // n
-    int by = blockIdx.y; // R
-    int tx = threadIdx.x;
-    int ty = threadIdx.y;
-
-    __shared__ real Ws[TILE_SIZE][TILE_SIZE];
-    __shared__ real As[TILE_SIZE][TILE_SIZE];
-    real Wprimesub = 0;
-
-    for (int b = 0; b < (m+TILE_SIZE-1-startc)/TILE_SIZE; ++b) {
-        if (b*TILE_SIZE+tx+startc < m and ty + by*TILE_SIZE < R) {
-            Ws[tx][ty] = W[POS(b*TILE_SIZE+tx+startc, ty + by*TILE_SIZE, m)];
-        } else {
-            Ws[tx][ty] = 0;
-        }
-        if (b*TILE_SIZE+ty+startc < m and bx*TILE_SIZE+startn+tx < n) {
-            As[tx][ty] = A[POS(b*TILE_SIZE+ty+startc, bx*TILE_SIZE+startn+tx, m)];
-        } else {
-            As[tx][ty] = 0;
-        }
-        __syncthreads();
-
-        for (int k = 0; k < TILE_SIZE; ++k) {
-            // Wprimesub += Ws[tx][k]*As[ty][k];
-            Wprimesub += Ws[k][tx]*As[k][ty];
-        }
-    }
-    if (ty + by*TILE_SIZE < R and bx*TILE_SIZE+startn+tx < n) {
-        Wprime[POS(bx*TILE_SIZE+startn+tx, ty + by*TILE_SIZE, n)] = Wprimesub;
-    }
-}
-
-__global__ void calc_Wprime3(real *A, int m, int ld, int n, int startc, int startn, int R, real *W, real *Wprime) {
-    int y = threadIdx.x + startc;
-    int stride = WPRIME_VERT;
-    int nx = threadIdx.y + blockIdx.y*blockDim.y + startn;
-    int Rx = threadIdx.y;
-
-    __shared__ real Ws[WPRIME_N][WPRIME_VERT];
-    __shared__ real As[WPRIME_N][WPRIME_VERT];
-    __shared__ real Wprimes[WPRIME_N][WPRIME_N];
-
-
-    for (; y < m; y += stride) {
-        Ws[Rx][threadIdx.x] = W[POS(y, Rx, m)];
-        As[threadIdx.y][threadIdx.x] = A[POS(y, threadIdx.y, m)];
-        __syncthreads();
-        for (int i = 0; i < stride; ++i) {
-            Wprimes[threadIdx.x][threadIdx.y] += Ws[threadIdx.x][i]*As[threadIdx.y][i];
-            Wprimes[threadIdx.x+16][threadIdx.y] += Ws[threadIdx.x+16][i]*As[threadIdx.y][i];
-        }
-    }
-    Wprime[POS(nx, Rx, n)] = Wprimes[threadIdx.x][threadIdx.y];
-    Wprime[POS(nx, Rx, n)] = Wprimes[threadIdx.x][threadIdx.y];
-}
-
-
-__global__ void calc_Wprime_dumb(real *A, int m, int ld, int n, int startc, int startn, int R, real *W, real *Wprime) {
-    Wprime[POS(blockIdx.x, blockIdx.y, n)] = 0;
-    for (unsigned int i = 0; i < m; i += 1) {
-        Wprime[POS(blockIdx.x, blockIdx.y, n)] += W[POS(i, blockIdx.y, m)]*A[POS(i, blockIdx.x, ld)];;
-
-    }
-}
-
-
 __global__ void add_YWprime(real *A, int m, int ld, int n, int startc, int startn, int R, real *Y, real *Wprime) {
     int r = threadIdx.x + blockDim.x*blockIdx.x + startc;
     int c = threadIdx.y + blockDim.y*blockIdx.y + startn;
@@ -231,75 +242,31 @@ __global__ void add_YWprime(real *A, int m, int ld, int n, int startc, int start
     }
 }
 
-// __global__ void add_YWprime2(real *A, int m, int ld, int n, int startc, int startn, int R, real *Y, real *Wprime) {
-//     // int r = threadIdx.x + blockDim.x*blockIdx.x + startc;
-//     // int c = threadIdx.y + blockDim.y*blockIdx.y + startn;
-//     // if (r < m && c < n) {
-//     //     real addVal = 0;
-//     //     for (int i = 0; i < R; ++i) {
-//     //         addVal += Y[POS(r, i, m)]*Wprime[POS(c, i, n)];
-//     //     }
-//     //     A[POS(r, c, ld)] += addVal;
-//     // }
-
-//     int bx = blockIdx.x;
-//     int by = blockIdx.y;
-//     int tx = threadIdx.x;
-//     int ty = threadIdx.y;
-
-//     int r = tx+bx*TILE_SIZE_ADD;
-//     int c = ty+by*TILE_SIZE_ADD;
-
-//     __shared__ real Ys[TILE_SIZE_ADD][TILE_SIZE_ADD];
-//     __shared__ real Wprimes[TILE_SIZE_ADD][TILE_SIZE_ADD];
-//     real Asub = 0;
-
-//     for (int b = 0; b < R/TILE_SIZE_ADD; ++b) {
-//         Ys[ty][tx] = Y[POS(r,b*TILE_SIZE_ADD+tx,m)];
-//         Wprimes[ty][tx] = Wprime[POS(c,b*TILE_SIZE_ADD+tx,n)];
-//         __syncthreads();
-
-//         for (int k = 0; k < TILE_SIZE_ADD; ++k) {
-//             Asub += Ys[ty][k]*Wprimes[k][tx];
-//         }
-//         __syncthreads();
-//     }
-//     A[POS(r, c, m)] += Asub;
-// }
-
 void rankRUpdate(real *A, int m, int ld, int n, int startc, int startn, int R, real *Y, real *W, real *Wprime) {
-    // if (n - startn < 1200) {
-    calc_Wprime<<<dim3(n-startn, R, 1), dim3(BLOCKDIM_X_WPRIME, 1, 1)>>>(A, m, ld, n, startc, startn, R, W, Wprime);
-    // calc_Wprime_dumb<<<dim3(n, R, 1), dim3(1, 1, 1)>>>(A, m, ld, n, startc, startn, R, W, Wprime);
-    // } else {
-    // real one = 1;
-    // real zero = 0;
-    // cublasSgemm(cublasH,
-    // cublasDgemm(cublasH,
-    //             CUBLAS_OP_N, CUBLAS_OP_N,
-    //             R, n - startn, m - startc,
-    //             &one,
-    //             W, m,
-    //             A, m,
-    //             &zero,
-    //             Wprime, n);
-    // calc_Wprime2<<<dim3((n-startn+TILE_SIZE-1)/TILE_SIZE, (R+TILE_SIZE-1)/TILE_SIZE, 1), dim3(TILE_SIZE, TILE_SIZE, 1)>>>(A, m, ld, n, startc, startn, R, W, Wprime);
-    // }
-    // calc_Wprime3<<<dim3(1,(n-startn)/WPRIME_N, 1), dim3(WPRIME_VERT, WPRIME_N, 1)>>>(A, m, ld, n, startc, startn, R, W, Wprime);
+    // calc_Wprime<<<dim3(n-startn, R, 1), dim3(BLOCKDIM_X_WPRIME, 1, 1)>>>(A, m, ld, n, startc, startn, R, W, Wprime);
+    real one = 1;
+    real zero = 0;
+    cublas_gemm(cublasH,
+                CUBLAS_OP_T, CUBLAS_OP_N,
+                n - startn, R, m - startc,
+                &one,
+                A + POS(startc, startn, ld), ld,
+                W + POS(startc, 0, m), m,
+                &zero,
+                Wprime + POS(startn, 0, n), n);
 
 
     // int blockdimx = min((m - startc), BLOCKDIM_X_RADD);
     // int blockdimy = min((n - startn), BLOCKDIM_Y_RADD);
     // add_YWprime<<<dim3((m-startc+blockdimx-1)/blockdimx, (n - startn + blockdimy-1)/blockdimy, 1), dim3(blockdimx, blockdimy, 1)>>>(A, m, ld, n, startc, startn, R, Y, Wprime);
-    // add_YWprime2<<<dim3((m-startc+TILE_SIZE_ADD-1)/TILE_SIZE_ADD, (n - startn + TILE_SIZE_ADD - 1)/TILE_SIZE_ADD, 1), dim3(TILE_SIZE_ADD, TILE_SIZE_ADD, 1)>>>(A, m, ld, n, startc, startn, R, Y, Wprime);
-    // cublasSgemm(cublasH,
-    //             CUBLAS_OP_N, CUBLAS_OP_N,
-    //             m - startc, n - startn, R,
-    //             &one,
-    //             Y, m,
-    //             Wprime, R,
-    //             &one,
-    //             A, ld);
+    cublas_gemm(cublasH,
+                CUBLAS_OP_N, CUBLAS_OP_T,
+                m - startc, n - startn, R,
+                &one,
+                Y + POS(startc, 0, m), m,
+                Wprime + POS(startn, 0, n), n,
+                &one,
+                A + POS(startc, startn, ld), ld);
 }
 
 
@@ -361,16 +328,6 @@ void append_W(int m, int col, int startc, real *Y, real *W, real *Wprime, real *
     }
 }
 
-__global__ void printY(real *A, int m, int ld, int n, int R, real *Y, real *W) {
-    int x = blockIdx.x;
-    int y = blockIdx.y;
-    A[POS(x, y, ld)] = W[POS(x, y, m)];
-}
-
-__global__ void printbeta(real *A, real *beta) {
-    *A = *beta;
-}
-
 void doOneBlock(real *A, int m, int ld, int n, int R, int col, real *Y, real *W, real *Wprime, real *beta, real *magX2) {
     for (int i = 0; i < R; ++i) {
         int curcol = col + i;
@@ -396,7 +353,7 @@ void doOneBlock(real *A, int m, int ld, int n, int R, int col, real *Y, real *W,
 //     }
 // }
 
-void QRBlockSolve(real *A, int m, int na, int nb, int ld, int R) {
+void QRBlockSolve(real *A, int m, int na, int nb, int ld, int R, uint64_t *usec_taken) {
     real *magX2;
     real *beta;
     real *Y;
@@ -427,19 +384,20 @@ void QRBlockSolve(real *A, int m, int na, int nb, int ld, int R) {
       return;
     }
 
+    cudaDeviceSynchronize();
+    auto cuStart = std::chrono::high_resolution_clock::now();
+
     for (int col = 0; col < na; col += R) {
         int curR = min(R, na - col);
         doOneBlock(A, m, ld, (na+nb), curR, col, Y, W, Wprime, beta, magX2);
     }
 
-    if (cublasH) cublasDestroy(cublasH);
+    cudaDeviceSynchronize();
+    auto cuEnd = std::chrono::high_resolution_clock::now();
+    auto cuDuration = std::chrono::duration_cast<std::chrono::microseconds>(cuEnd - cuStart).count();
+    *usec_taken = cuDuration;
 
-    // MagX2<<<dim3(1), dim3(BLOCKDIM_X)>>>(A, rows, 0, cols_extended, magX2);
-    // for (int i = 0; i < iters; ++i) {
-    //     house<<<dim3(1), dim3(cols_extended-i)>>>(A, rows, cols_extended, i, magX2);
-    // }
-    // zeroLowerTriangular<<<dim3(1), dim3(BLOCKDIM_X)>>>(A, rows, cols, cols_extended);
-    // cudaFree(magX2);
+    if (cublasH) cublasDestroy(cublasH);
 
     cudaFree(magX2);
     cudaFree(beta);

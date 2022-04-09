@@ -6,6 +6,10 @@
 
 #include <utility>
 
+Matrix::Matrix()
+  : data(nullptr)
+{}
+
 Matrix::Matrix(pos_t rows, pos_t cols)
   : rows(rows)
   , cols(cols)

@@ -6,6 +6,6 @@
 #include "Matrix.h"
 #include <cuda_runtime.h>
 
-void QRBlockSolve(real *A, int m, int na, int nb, int ld, int R);
+void QRBlockSolve(real *A, int m, int na, int nb, int ld, int R, uint64_t *usec_taken);
 
 #endif

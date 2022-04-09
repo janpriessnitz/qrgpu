@@ -9,7 +9,7 @@
 
 #include "QRInvoke.h"
 
-void InvokeSolve(Matrix *A, int cols) {
+void InvokeSolve(Matrix *A, int cols, uint64_t *usec_taken) {
   int rows = A->rows;
   int cols_expanded = A->cols;
   auto AT = A->getT();
@@ -32,7 +32,7 @@ void InvokeSolve(Matrix *A, int cols) {
   cudaMemcpy(dA, AT.data, rows*cols_expanded*sizeof(dA[0]), cudaMemcpyHostToDevice);
 
   cudaDeviceSynchronize();
-  QRBlockSolve(dA, rows, cols, cols_expanded - cols, rows, 64);
+  QRBlockSolve(dA, rows, cols, cols_expanded - cols, rows, 32, usec_taken);
   // QRSolve(dA, rows, cols, cols_expanded - cols, rows);
   printf("Kernel launch error: %s\n", cudaGetErrorString(cudaGetLastError()));
   cudaDeviceSynchronize();

@@ -2,6 +2,8 @@
 #include "QRReference.h"
 
 #include <cstdio>
+#include <chrono>
+
 #include "Matrix.h"
 
 
@@ -17,7 +19,7 @@ void printMatrix(int m, int n, const real*A, int lda, const char* name)
 
 
 // Taken from https://docs.nvidia.com/cuda/cusolver/index.html#ormqr-example1
-Matrix QRReferenceCuSolver(const Matrix &A, const Matrix &B) {
+Matrix QRReferenceCuSolver(const Matrix &A, const Matrix &B, uint64_t *us_taken) {
     cusolverDnHandle_t cusolverH = NULL;
     cublasHandle_t cublasH = NULL;
     cublasStatus_t cublas_status = CUBLAS_STATUS_SUCCESS;
@@ -84,13 +86,12 @@ Matrix QRReferenceCuSolver(const Matrix &A, const Matrix &B) {
     assert(cudaSuccess == cudaStat3);
     assert(cudaSuccess == cudaStat4);
 
-    cudaStat1 = cudaMemcpy(d_A, AT.data, sizeof(real) * lda * cols   , cudaMemcpyHostToDevice);
+    cudaStat1 = cudaMemcpy(d_A, AT.data, sizeof(real) * lda * cols, cudaMemcpyHostToDevice);
     cudaStat2 = cudaMemcpy(d_B, BT.data, sizeof(real) * ldb * nrhs, cudaMemcpyHostToDevice);
     assert(cudaSuccess == cudaStat1);
     assert(cudaSuccess == cudaStat2);
     /* step 3: query working space of geqrf and ormqr */
-    // cusolver_status = cusolverDnDgeqrf_bufferSize(
-    cusolver_status = cusolverDnSgeqrf_bufferSize(
+    cusolver_status = cusolverDn_geqrf_bufferSize(
         cusolverH,
         rows,
         cols,
@@ -99,8 +100,7 @@ Matrix QRReferenceCuSolver(const Matrix &A, const Matrix &B) {
         &lwork_geqrf);
     assert (cusolver_status == CUSOLVER_STATUS_SUCCESS);
 
-    // cusolver_status= cusolverDnDormqr_bufferSize(
-    cusolver_status= cusolverDnSormqr_bufferSize(
+    cusolver_status= cusolverDn_ormqr_bufferSize(
         cusolverH,
         CUBLAS_SIDE_LEFT,
         CUBLAS_OP_T,
@@ -120,9 +120,12 @@ Matrix QRReferenceCuSolver(const Matrix &A, const Matrix &B) {
     cudaStat1 = cudaMalloc((void**)&d_work, sizeof(real)*lwork);
     assert(cudaSuccess == cudaStat1);
 
+    cudaDeviceSynchronize();
+    auto cuStart = std::chrono::high_resolution_clock::now();
+
+
 /* step 4: compute QR factorization */
-    // cusolver_status = cusolverDnDgeqrf(
-    cusolver_status = cusolverDnSgeqrf(
+    cusolver_status = cusolverDn_geqrf(
         cusolverH,
         rows,
         cols,
@@ -136,6 +139,11 @@ Matrix QRReferenceCuSolver(const Matrix &A, const Matrix &B) {
     assert(CUSOLVER_STATUS_SUCCESS == cusolver_status);
     assert(cudaSuccess == cudaStat1);
 
+    cudaDeviceSynchronize();
+    auto cuEnd = std::chrono::high_resolution_clock::now();
+    auto cuDuration = std::chrono::duration_cast<std::chrono::microseconds>(cuEnd - cuStart).count();
+    *us_taken = cuDuration;
+
     /* check if QR is good or not */
     cudaStat1 = cudaMemcpy(&info_gpu, devInfo, sizeof(int), cudaMemcpyDeviceToHost);
     assert(cudaSuccess == cudaStat1);
@@ -143,8 +151,7 @@ Matrix QRReferenceCuSolver(const Matrix &A, const Matrix &B) {
     // printf("after geqrf: info_gpu = %d\n", info_gpu);
     assert(0 == info_gpu);
     /* step 5: compute Q^T*B */
-    // cusolver_status= cusolverDnDormqr(
-    cusolver_status= cusolverDnSormqr(
+    cusolver_status= cusolverDn_ormqr(
         cusolverH,
         CUBLAS_SIDE_LEFT,
         CUBLAS_OP_T,
@@ -170,8 +177,7 @@ Matrix QRReferenceCuSolver(const Matrix &A, const Matrix &B) {
     assert(0 == info_gpu);
 
 /* step 6: compute x = R \ Q^T*B */
-    // cublas_status = cublasDtrsm(
-    cublas_status = cublasStrsm(
+    cublas_status = cublas_trsm(
          cublasH,
          CUBLAS_SIDE_LEFT,
          CUBLAS_FILL_MODE_UPPER,
