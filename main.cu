@@ -28,10 +28,14 @@ int main(int argc, char** argv) {
 
     
     uint64_t cuDuration;
-    QRReferenceCuSolver(A, B, &cuDuration);
-    auto cuSolverX = QRReferenceCuSolver(A, B, &cuDuration);
+    // QRReferenceCuSolver(A, B, &cuDuration);
+    // auto cuSolverX = QRReferenceCuSolver(A, B, &cuDuration);
 
     uint64_t myDuration;
+    InvokeSolve(&A, NULL, cols, &myDuration);
+    InvokeSolve(&A, NULL, cols, &myDuration);
+    InvokeSolve(&A, NULL, cols, &myDuration);
+    InvokeSolve(&A, NULL, cols, &myDuration);
     InvokeSolve(&A, NULL, cols, &myDuration);
     // printf("my:\n");
     // A.print();
@@ -40,7 +44,7 @@ int main(int argc, char** argv) {
     // auto myX = QRCPUSolver::SolveTriangular(solPair.first, solPair.second);
 
 
-    printf("Error %.20lf\n", Matrix::SquareDifference(A, cuSolverX));
+    // printf("Error %.20lf\n", Matrix::SquareDifference(A, cuSolverX));
     printf("my time [us]: %ld, cuSolver time [us]: %ld, %fx speedup\n", myDuration, cuDuration, cuDuration/(double)myDuration);
 
     return 0;

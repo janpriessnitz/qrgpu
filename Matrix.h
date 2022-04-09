@@ -7,7 +7,7 @@
 
 #include <utility>
 
-#define DOUBLE_PRECISION 1
+#define DOUBLE_PRECISION 0
 
 #if DOUBLE_PRECISION
 #define cublas_gemm cublasDgemm
