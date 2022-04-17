@@ -17,6 +17,7 @@
 #define cusolverDn_ormqr cusolverDnDormqr
 #define cublas_trsm cublasDtrsm
 #define cublas_gemv cublasDgemv
+#define cublas_syrk cublasDsyrk
 typedef double real;
 #else
 #define cublas_gemm cublasSgemm
@@ -26,6 +27,7 @@ typedef double real;
 #define cusolverDn_ormqr cusolverDnSormqr
 #define cublas_trsm cublasStrsm
 #define cublas_gemv cublasSgemv
+#define cublas_syrk cublasSsyrk
 typedef float real;
 #endif
 

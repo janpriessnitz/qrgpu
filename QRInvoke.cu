@@ -38,7 +38,7 @@ void InvokeSolve(Matrix *A, real *taus, int cols, uint64_t *usec_taken) {
   }
 
   cudaDeviceSynchronize();
-  QRBlockSolve(dA, dTaus, rows, cols, cols_expanded - cols, rows, 32, usec_taken);
+  QRBlockSolve(dA, dTaus, rows, cols, rows, usec_taken);
   // QRSolve(dA, rows, cols, cols_expanded - cols, rows);
   printf("Kernel launch error: %s\n", cudaGetErrorString(cudaGetLastError()));
   cudaDeviceSynchronize();
@@ -51,5 +51,5 @@ void InvokeSolve(Matrix *A, real *taus, int cols, uint64_t *usec_taken) {
   cleanup:
     if (dA) cudaFree(dA);
     if (dTaus) cudaFree(dTaus);
-
+    cudaDeviceReset();
 }

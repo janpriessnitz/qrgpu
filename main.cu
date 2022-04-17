@@ -12,30 +12,22 @@ int main(int argc, char** argv) {
     // srand(time(nullptr));
     srand(2);
 
-    int rows = 4000;
-    int cols = 4000;
-    int nrhs = 1;
+    int rows = 8000;
+    int cols = 2000;
 
     auto A = Matrix::GenerateRandom(rows, cols);
-    auto B = Matrix::GenerateRandom(rows, nrhs);
-    // Aexpanded.print();
-
-  
-    // Aexpanded.print();
 
     // printf("Input A:\n");
     // A.print();
 
-    
-    uint64_t cuDuration;
-    // QRReferenceCuSolver(A, B, &cuDuration);
-    // auto cuSolverX = QRReferenceCuSolver(A, B, &cuDuration);
 
-    uint64_t myDuration;
-    InvokeSolve(&A, NULL, cols, &myDuration);
-    InvokeSolve(&A, NULL, cols, &myDuration);
-    InvokeSolve(&A, NULL, cols, &myDuration);
-    InvokeSolve(&A, NULL, cols, &myDuration);
+    uint64_t cuDuration;
+    QRReferenceCuSolver(A, &cuDuration);
+    QRReferenceCuSolver(A, &cuDuration);
+
+    auto cuSolverX = QRReferenceCuSolver(A, &cuDuration);
+
+    uint64_t myDuration = 0;
     InvokeSolve(&A, NULL, cols, &myDuration);
     // printf("my:\n");
     // A.print();
@@ -44,7 +36,7 @@ int main(int argc, char** argv) {
     // auto myX = QRCPUSolver::SolveTriangular(solPair.first, solPair.second);
 
 
-    // printf("Error %.20lf\n", Matrix::SquareDifference(A, cuSolverX));
+    printf("Error %.20lf\n", Matrix::SquareDifference(A, cuSolverX));
     printf("my time [us]: %ld, cuSolver time [us]: %ld, %fx speedup\n", myDuration, cuDuration, cuDuration/(double)myDuration);
 
     return 0;

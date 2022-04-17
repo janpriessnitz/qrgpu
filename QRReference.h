@@ -10,6 +10,6 @@
 
 #include "Matrix.h"
 
-Matrix QRReferenceCuSolver(const Matrix &A, const Matrix &B, uint64_t *us_taken);
+Matrix QRReferenceCuSolver(const Matrix &A, uint64_t *us_taken);
 
 #endif
