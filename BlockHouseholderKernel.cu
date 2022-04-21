@@ -1,5 +1,3 @@
-// CUDA rhypot function!!
-
 #include <cuda_runtime.h>
 #include <cmath>
 #include <cstdio>
@@ -12,12 +10,10 @@
 #define BLOCKDIM_X_V 1024
 
 #define BLOCKDIM_X_CALC_YPRIME 128
-#define BLOCKDIM_X_CALCW 64
+#define BLOCKDIM_X_CALCW 128
 #define BLOCKDIM_X_COPYW 1024
 
-#define BLOCKDIM_MATMUL_SKINNY 16
-
-#define HOUSEHOLDER_BLOCK_SIZE 48
+#define HOUSEHOLDER_BLOCK_SIZE 96
 
 #define POS(r, c, ld) ((c)*(ld) + (r))
 
@@ -25,196 +21,6 @@
 cublasHandle_t cublasH = NULL;
 cudaStream_t stream1, stream2, stream3, stream4;
 
-
-// NOTE- m is the common dimension between matrix A and B
-template <int t1, int t2, int t3>
-__global__ void floatTSM2Kernel(const float* A, const float* B, float* C,
-                                const unsigned int m, const unsigned int n,
-                                const unsigned int k)
-{
-    // Names mostly follow the published code
-    __shared__ float currB[t1 * t2];
-
-    float currA[t3];
-    float nextA[t3];
-    float nextB[t2];
-    float currC[t2];
-
-    const int tid = threadIdx.x;
-    int threadBase = (blockIdx.x * blockDim.x);
-    int thread;
-
-    // This implementation can respond to arbitrary input
-
-    // We cannot rule out a thread's participation based on
-    // whether it corresponds to a row in Matrix A, so we
-    // introduce threadBase.
-    for (; threadBase < m; threadBase += blockDim.x * gridDim.x)
-    {
-        thread = threadBase + tid;
-        for (int p = 0; p < n; p += t2)
-        {
-            // Load loops have extra conditionals to ensure
-            // they do not make bad memory accesses
-
-            // Loads first tile of output registers and A
-            if (thread < m)
-            {
-                #pragma unroll
-                for (int i = 0; i < t2; ++i)
-                {
-                    if (p + i < n)
-                    {
-                        currC[i] = C[thread + ((p + i) * m)];
-                    }
-                }
-                // Loads currA
-                #pragma unroll
-                for (int i = 0; i < t3; ++i)
-                {
-                    if (i < k)
-                    {
-                        currA[i] = A[thread + (i * m)];
-                    }
-                }
-            }
-            // Loads tile of B
-            if (tid < k)
-            {
-                #pragma unroll
-                for (int i = 0; i < t2; ++i)
-                {
-                    if (p + i < n)
-                    {
-                        currB[tid + (i * t1)] = B[tid + ((p + i) * k)];
-                    }
-                }
-            }
-
-            // Outer product loop
-            for (int j = 0; j < k; j += t1)
-            {
-                __syncthreads();
-                // Loads next tile of B
-                if (j + t1 + tid < k)
-                {
-                    #pragma unroll
-                    for (int i = 0; i < t2; ++i)
-                    {
-                        if (p + i < n)
-                        {
-                            nextB[i] = B[(j + t1 + tid) + ((p + i) * k)];
-                        }
-                    }
-                }
-
-                const int t3mod = t1 % t3;
-
-                // Loop over A's columns
-                for (int l = j; l < j + (t1 - t3mod) && l < k; l += t3)
-                {
-                    // Loads next A
-                    #pragma unroll
-                    for (int i = 0; i < t3; ++i)
-                    {
-                        if (l + t3 + i < k && thread < m)
-                        {
-                            nextA[i] = A[thread + ((l + t3 + i) * m)];
-                        }
-                    }
-
-                    // Floating Point Operations (lines 32-34)
-                    // Each thread does t2 * t3 mults
-
-                    // Either dispatch guarded or unguarded instructions based on
-                    // position in matrix A
-                    if (l + t3 <= k)
-                    {
-                        // It is assumed that B[(l - j) .. (l - j) + t3 - 1, _]  exist
-                        #pragma unroll
-                        for (int a = 0; a < t2; ++a)
-                        {
-                            #pragma unroll
-                            for (int b = 0; b < t3; ++b)
-                            {
-                                currC[a] += currA[b] * currB[(l - j) + b + (a * t1)];
-                            }
-                        }
-                    }
-                    else
-                    {
-                        #pragma unroll
-                        for (int a = 0; a < t2; ++a)
-                        {
-                            #pragma unroll
-                            for (int b = 0; b < t3; ++b)
-                            {
-                                if (l + b < k)
-                                {
-                                    currC[a] += currA[b] * currB[(l - j) + b + (a * t1)];
-                                }
-                            }
-                        }
-                    }
-
-                    // Stores next A in curr A
-                    #pragma unroll
-                    for (int i = 0; i < t3; ++i)
-                    {
-                        currA[i] = nextA[i];
-                    }
-                }
-                // Accommodates t3 that do not divide t1.
-                #pragma unroll
-                for (int a = 0; a < t2; ++a)
-                {
-                    #pragma unroll
-                    for (int b = 0; b < t3mod; ++b)
-                    {
-                        if (j + t1 - t3mod + b < k)
-                        {
-                            currC[a] += currA[b] * currB[(t1 - t3mod + b) + (a * t1)];
-                        }
-                    }
-                }
-
-                __syncthreads();
-
-                // Loads currB from each thread's nextB
-                #pragma unroll
-                for (int i = 0; i < t2; ++i)
-                {
-                    currB[tid + (i * t1)] = nextB[i];
-                }
-
-                // Loads next currA
-                if (t3mod != 0)
-                {
-                    #pragma unroll
-                    for (int i = 0; i < t3; ++i)
-                    {
-                        if (j + t1 + i < k && thread < m)
-                        {
-                            currA[i] = A[thread + ((j + t1 + i) * m)];
-                        }
-                    }
-                }
-            }
-            // Stores C
-            if (thread < m)
-            {
-                #pragma unroll
-                for (int i = 0; i < t2; ++i)
-                {
-                    if (p + i < n)
-                    {
-                        C[thread + ((p + i) * m)] = currC[i];
-                    }
-                }
-            }
-        }
-    }
-}
 
 
 __device__ void warpReduce(volatile real *s, int tid) {
@@ -288,12 +94,6 @@ __global__ void householder_calc_beta(real *A, int m, int ld, int col, real *V, 
     }
 }
 
-void house(real *A, int m, int ld, int col, real *V, real *taus, real *beta, int startc) {
-    startc >>= 5;
-    startc <<= 5;
-    householder_calc_beta<<<1, BLOCKDIM_X_HOUSE, 0, stream1>>>(A, m, ld, col, V, startc);
-}
-
 __global__ void calc_and_add_V(real *A, int m, int ld, real *V, real *Vprime) {
     int col = blockIdx.x;
     int x = threadIdx.x;
@@ -326,41 +126,6 @@ __global__ void calc_and_add_V(real *A, int m, int ld, real *V, real *Vprime) {
     }
 }
 
-void rankOneUpdate(real *A, int m, int ld, int n, real *V, int startc, real *Vprime) {
-    if (n - startc - 1 == 0)
-        return;
-    int blockdim =  BLOCKDIM_X_V;
-    while(blockdim > m - startc && blockdim > 64) blockdim >>= 1;
-    calc_and_add_V<<<n-startc-1, blockdim, 0, stream1>>>(A + POS(startc, startc+1, ld), m - startc, ld, V + startc, Vprime);
-}
-
-void rankRUpdate(real *A, int m, int ld, int n, int startc, int startn, int R, real *Y, real *W, real *Wprime) {
-    real one = 1;
-    real zero = 0;
-    // TODO: TSMTTSM https://journals.sagepub.com/doi/full/10.1177/1094342020965661
-    // taking 12/72
-    cublas_gemm(cublasH,
-                CUBLAS_OP_T, CUBLAS_OP_N,
-                n - startn, R, m - startc,
-                &one,
-                A + POS(startc, startn, ld), ld,
-                W + POS(startc, 0, m), m,
-                &zero,
-                Wprime + POS(startn, 0, n), n);
-
-    // TODO: TSMM https://journals.sagepub.com/doi/full/10.1177/1094342020965661
-    // taking 22/72
-    cublas_gemm(cublasH,
-                CUBLAS_OP_N, CUBLAS_OP_T,
-                m - startc, n - startn, R,
-                &one,
-                Y + POS(startc, 0, m), m,
-                Wprime + POS(startn, 0, n), n,
-                &one,
-                A + POS(startc, startn, ld), ld);
-}
-
-
 __global__ void calc_W(int m, int startc, real *W, real *Y, real *Yprime, int R) {
     int x = threadIdx.x + blockIdx.x*blockDim.x + startc;
     if (x < m) {
@@ -375,8 +140,8 @@ __global__ void calc_W(int m, int startc, real *W, real *Y, real *Yprime, int R)
     }
 }
 
-__global__ void copy_W2(int m, int startc, real *Y, real *W) {
-    int x = threadIdx.x + startc;
+__global__ void copy_W(int m, real *Y, real *W) {
+    int x = threadIdx.x;
     int dimX = blockDim.x;
     for (int i = x; i < m; i += dimX) {
         W[i] = -Y[i];
@@ -415,27 +180,91 @@ __global__ void calc_Yprime(real *Y, int m, int startc, int R, real *Yprime) {
     }
 }
 
-void doOneBlock(real *A, int m, int ld, int n, int R, int col, real *Y, real *W, real *Wprime, real *beta, real *taus) {
+void doOneBlock(real *A, int m, int ld, int n, int R, int col, real *Y, real *W, real *Wprime, real *taus) {
+    int startc = col;
+    int startn = col + R;
+
+    real one = 1;
+    real zero = 0;
+
     int blockdimW = BLOCKDIM_X_CALCW;
     while(blockdimW > m - col && blockdimW > 64) blockdimW >>= 1;
+
+    int blockdimH = BLOCKDIM_X_HOUSE;
+    while(blockdimH > m - col && blockdimH > 64) blockdimH >>= 1;
 
     for (int i = 0; i < R; ++i) {
         int curcol = col + i;
         if (curcol >= m - 1) goto decomp_finished;
         real *curV = Y + POS(0, i, m);
-        house(A, m, ld, curcol, curV, taus, beta, col);
-        rankOneUpdate(A, m, ld, col + R, curV, curcol, Wprime);
+        householder_calc_beta<<<1, blockdimH, 0, stream1>>>(A, m, ld, curcol, curV, col);
+
+        if (R - i - 1 > 0) {
+            int blockdim = BLOCKDIM_X_V;
+            while(blockdim > m - curcol && blockdim > 64) blockdim >>= 1;
+            calc_and_add_V<<<R-i-1, blockdim, 0, stream1>>>(A + POS(curcol, curcol+1, ld), m - curcol, ld, curV + curcol, Wprime);
+        }
     }
     calc_Yprime<<<dim3(R, R), BLOCKDIM_X_CALC_YPRIME, 0, stream1>>>(Y, m, col, R, Wprime);
-    copy_W2<<<1, BLOCKDIM_X_COPYW, 0, stream1>>>(m, col, Y, W);
+    copy_W<<<1, BLOCKDIM_X_COPYW, 0, stream1>>>(m - col, Y + col, W + col);
     calc_W<<<(m - col + blockdimW-1)/blockdimW, blockdimW, 0, stream1>>>(m, col, W, Y, Wprime, R);
 
-    rankRUpdate(A, m, ld, n, col, col+R, R, Y, W, Wprime);
+    // TODO: TSMTTSM https://journals.sagepub.com/doi/full/10.1177/1094342020965661
+    // taking 12/72
+    // cublas_gemm(cublasH,
+    //             CUBLAS_OP_T, CUBLAS_OP_N,
+    //             n - startn, R, m - startc,
+    //             &one,
+    //             A + POS(startc, startn, ld), ld,
+    //             W + POS(startc, 0, m), m,
+    //             &zero,
+    //             Wprime + POS(startn, 0, n), n);
+
+    cublas_gemm(cublasH,
+                CUBLAS_OP_T, CUBLAS_OP_N,
+                R, n - startn, m - startc,
+                &one,
+                W + POS(startc, 0, m), m,
+                A + POS(startc, startn, ld), ld,
+                &zero,
+                Wprime + POS(0, startn, R), R);
+
+    // matmul_TN<<<dim3(n - startn, R), dim3(1, 1)>>>(
+    //     A + POS(startc, startn, ld), ld,
+    //     W + POS(startc, 0, m), m,
+    //     Wprime + POS(startn, 0, n), n,
+    //     n - startn, R, m - startc);
+
+    // TODO: TSMM https://journals.sagepub.com/doi/full/10.1177/1094342020965661
+    // taking 22/72
+    // cublas_gemm(cublasH,
+    //             CUBLAS_OP_N, CUBLAS_OP_T,
+    //             m - startc, n - startn, R,
+    //             &one,
+    //             Y + POS(startc, 0, m), m,
+    //             Wprime + POS(startn, 0, n), n,
+    //             &one,
+    //             A + POS(startc, startn, ld), ld);
+
+    cublas_gemm(cublasH,
+            CUBLAS_OP_N, CUBLAS_OP_N,
+            m - startc, n - startn, R,
+            &one,
+            Y + POS(startc, 0, m), m,
+            Wprime + POS(0, startn, R), R,
+            &one,
+            A + POS(startc, startn, ld), ld);
+    // floatTSM2Kernel<8,8,8><<<>>>(Y + POS(startc, 0, m), Wprime + POS(startn, 0, n), A + POS(startc, startn, ld), R, m - startc, n - startn);
+    // matmul_NT_add<<<(m-startc + MATMULNT_T1 - 1)/MATMULNT_T1, MATMULNT_T1>>>(
+    //     Y + POS(startc, 0, m), m,
+    //     Wprime + POS(startn, 0, n), n,
+    //     A + POS(startc, startn, ld), ld,
+    //     m - startc, n - startn, R);
+
     decomp_finished:;
 }
 
-void QRBlockSolve(real *A, real *taus, int m, int na, int ld, uint64_t *usec_taken) {
-    real *beta;
+void QRBlockSolve(real *A, real *taus, int m, int n, int ld, uint64_t *usec_taken) {
     real *Y;
     real *W;
     real *Wprime;
@@ -450,10 +279,6 @@ void QRBlockSolve(real *A, real *taus, int m, int na, int ld, uint64_t *usec_tak
 
     cublasSetStream(cublasH, stream1);
 
-    if (cudaMalloc((void**)&beta, sizeof(beta)) != cudaSuccess) {
-      fprintf(stderr, "Device memory allocation error!\n");
-      return;
-    }
     if (cudaMalloc((void**)&Y, sizeof(Y)*R*m) != cudaSuccess) {
       fprintf(stderr, "Device memory allocation error!\n");
       return;
@@ -462,7 +287,7 @@ void QRBlockSolve(real *A, real *taus, int m, int na, int ld, uint64_t *usec_tak
       fprintf(stderr, "Device memory allocation error!\n");
       return;
     }
-    if (cudaMalloc((void**)&Wprime, sizeof(Wprime)*R*na) != cudaSuccess) {  // TODO: might be faulty for (na+nb) < R
+    if (cudaMalloc((void**)&Wprime, sizeof(Wprime)*R*n) != cudaSuccess) {  // TODO: might be faulty for (na+nb) < R
       fprintf(stderr, "Device memory allocation error!\n");
       return;
     }
@@ -470,12 +295,18 @@ void QRBlockSolve(real *A, real *taus, int m, int na, int ld, uint64_t *usec_tak
     cudaDeviceSynchronize();
     auto cuStart = std::chrono::high_resolution_clock::now();
 
-    for (int col = 0; col < na-1; col += R) {
-        if (na-1-col <= 1000) {
+    for (int col = 0; col < n-1; col += R) {
+        if (n-1-col <= 4096) {
+            R = 64;
+        }
+        // if (n-1-col <= 2048) {
+        //     R = 48;
+        // }
+        if (n-1-col <= 1024) {
             R = 32;
         }
-        int curR = min(R, na - col);
-        doOneBlock(A, m, ld, na, curR, col, Y, W, Wprime, beta, taus);
+        int curR = min(R, n - col);
+        doOneBlock(A, m, ld, n, curR, col, Y, W, Wprime, taus);
     }
 
     cudaDeviceSynchronize();
@@ -485,7 +316,6 @@ void QRBlockSolve(real *A, real *taus, int m, int na, int ld, uint64_t *usec_tak
 
     if (cublasH) cublasDestroy(cublasH);
 
-    cudaFree(beta);
     cudaFree(Y);
     cudaFree(W);
     cudaFree(Wprime);

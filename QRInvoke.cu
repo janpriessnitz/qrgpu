@@ -9,12 +9,13 @@
 
 #include "QRInvoke.h"
 
-void InvokeSolve(Matrix *A, real *taus, int cols, uint64_t *usec_taken) {
+Matrix InvokeSolve(Matrix *A, real *taus, int cols, uint64_t *usec_taken) {
   int rows = A->rows;
   int cols_expanded = A->cols;
   auto AT = A->getT();
   real *dA = NULL;
   real *dTaus = NULL;
+  Matrix QR(A->cols, A->rows);
 
   int device = 0;
   if (cudaSetDevice(device) != cudaSuccess){
@@ -34,7 +35,7 @@ void InvokeSolve(Matrix *A, real *taus, int cols, uint64_t *usec_taken) {
 
   if (cudaMalloc((void**)&dTaus, sizeof(real)*cols) != cudaSuccess) {
       fprintf(stderr, "Device memory allocation error!\n");
-      return;
+      goto cleanup;
   }
 
   cudaDeviceSynchronize();
@@ -46,10 +47,11 @@ void InvokeSolve(Matrix *A, real *taus, int cols, uint64_t *usec_taken) {
   printf("Copying back to resulting matrices\n");
 
   // cudaMemcpy(taus, dTaus, cols*sizeof(real), cudaMemcpyDeviceToHost);
-  cudaMemcpy(AT.data, dA, rows*cols_expanded*sizeof(dA[0]), cudaMemcpyDeviceToHost);
-  *A = AT.getT();
+  cudaMemcpy(QR.data, dA, rows*cols_expanded*sizeof(dA[0]), cudaMemcpyDeviceToHost);
   cleanup:
     if (dA) cudaFree(dA);
     if (dTaus) cudaFree(dTaus);
     cudaDeviceReset();
+
+  return QR.getT();
 }
