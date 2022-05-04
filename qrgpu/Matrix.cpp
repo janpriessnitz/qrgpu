@@ -140,7 +140,7 @@ void Matrix::print(FILE *out) const {
 }
 
 Matrix Matrix::GenerateRandom(pos_t rows, pos_t cols) {
-  int MAX_NUM = 10;
+  int MAX_NUM = 100;
   int MIN_NUM = 1;
   Matrix out(rows, cols);
   for (pos_t r = 0; r < rows; ++r) {

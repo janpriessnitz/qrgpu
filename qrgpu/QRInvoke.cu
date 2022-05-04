@@ -24,7 +24,6 @@ Matrix InvokeSolve(Matrix *A, real *taus, int cols, uint64_t *usec_taken) {
   }
   cudaDeviceProp deviceProp;
   cudaGetDeviceProperties(&deviceProp, device);
-  printf("Using device %d: \"%s\"\n", device, deviceProp.name);
 
   // allocate and set device memory
   if (cudaMalloc((void**)&dA, rows*cols_expanded*sizeof(dA[0])) != cudaSuccess) {
@@ -41,10 +40,7 @@ Matrix InvokeSolve(Matrix *A, real *taus, int cols, uint64_t *usec_taken) {
   cudaDeviceSynchronize();
   QRBlockSolve(dA, dTaus, rows, cols, rows, usec_taken);
   // QRSolve(dA, rows, cols, cols_expanded - cols, rows);
-  printf("Kernel launch error: %s\n", cudaGetErrorString(cudaGetLastError()));
   cudaDeviceSynchronize();
-
-  printf("Copying back to resulting matrices\n");
 
   // cudaMemcpy(taus, dTaus, cols*sizeof(real), cudaMemcpyDeviceToHost);
   cudaMemcpy(QR.data, dA, rows*cols_expanded*sizeof(dA[0]), cudaMemcpyDeviceToHost);
