@@ -11,7 +11,6 @@ SOURCES = \
 	BlockHouseholderKernel.cu \
 	CPUValidation.cpp \
 	Matrix.cpp \
-	ProblemGenerator.cpp \
 	QRCPU.cpp \
 	QRInvoke.cu \
 	QRReference.cu

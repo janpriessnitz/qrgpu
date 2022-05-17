@@ -1,3 +1,5 @@
 KTT/
 *.o
-main
+qrgpu/main
+qrgpu/tune
+tuning/
